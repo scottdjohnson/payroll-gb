@@ -13,7 +13,8 @@
   th { background: #f3f3f3; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
   .scroll { overflow-x: auto; }
-  .changed { background: #fff3b0; font-weight: 600; }
+  tr.row-changed td { background: #d6ecff; }
+  tr.row-changed td.changed { background: #7fc4f8; font-weight: 600; }
   tr.added td { background: #d6f5d6; }
   tr.removed td { background: #f8d4d4; }
   .flag { color: #b00020; font-weight: 600; }
@@ -101,7 +102,7 @@ function anomalyTable(headers, anomalies) {
       return `<tr class="${status}"><td>${status}</td>${headers.map(h => `<td>${esc(src[h])}</td>`).join("")}</tr>`;
     }
     return [["A", ra], ["B", rb]].map(([label, src]) =>
-      `<tr><td>changed (${label})</td>${headers.map(h => `<td class="${changed.has(h) ? "changed" : ""}">${esc(src[h])}</td>`).join("")}</tr>`
+      `<tr class="row-changed"><td>changed (${label})</td>${headers.map(h => `<td class="${changed.has(h) ? "changed" : ""}">${esc(src[h])}</td>`).join("")}</tr>`
     ).join("");
   }).join("");
   return `<div class="scroll"><table><tr><th>Status</th>${head}</tr>${body}</table></div>`;
@@ -116,7 +117,8 @@ function sideBySideTable(headers, rows) {
       const cls = changed.has(h) ? "changed" : "";
       return `<td class="${cls}">${ra ? esc(ra[h]) : ""}</td><td class="${cls}">${rb ? esc(rb[h]) : ""}</td>`;
     }).join("");
-    return `<tr class="${status === "added" || status === "removed" ? status : ""}"><td>${esc(id)}</td>${cells}</tr>`;
+    const rowClass = { added: "added", removed: "removed", changed: "row-changed" }[status] ?? "";
+    return `<tr class="${rowClass}"><td>${esc(id)}</td>${cells}</tr>`;
   }).join("");
   return `<div class="scroll"><table>${head1}${head2}${body}</table></div>`;
 }
