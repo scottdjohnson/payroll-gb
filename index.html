@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Payroll Comparison</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 2rem; color: #222; }
+  h2 { margin-top: 2rem; }
+  label { display: inline-block; margin-right: 1.5rem; }
+  table { border-collapse: collapse; margin: .5rem 0; }
+  th, td { border: 1px solid #ccc; padding: 4px 8px; text-align: left; }
+  th { background: #f3f3f3; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .scroll { overflow-x: auto; }
+  .changed { background: #fff3b0; font-weight: 600; }
+  tr.added td { background: #d6f5d6; }
+  tr.removed td { background: #f8d4d4; }
+  .flag { color: #b00020; font-weight: 600; }
+  .error { color: #b00020; }
+</style>
+</head>
+<body>
+<h1>Payroll Comparison</h1>
+<label>File A <input type="file" id="fileA" accept=".csv"></label>
+<label>File B <input type="file" id="fileB" accept=".csv"></label>
+<p class="error" id="error"></p>
+<div id="report"></div>
+
+<script>
+const KEY = "employee_id";
+const IGNORED = new Set(["pay_date"]);
+const TAX_FIELDS = ["federal_tax", "state_tax"];
+
+function parseCsv(text) {
+  const rows = [];
+  let row = [], field = "", quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '"' && text[i + 1] === '"') { field += '"'; i++; }
+      else if (c === '"') quoted = false;
+      else field += c;
+    } else if (c === '"') quoted = true;
+    else if (c === ",") { row.push(field); field = ""; }
+    else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(field); field = "";
+      rows.push(row); row = [];
+    } else field += c;
+  }
+  if (field || row.length) { row.push(field); rows.push(row); }
+  const [headers, ...data] = rows.filter(r => r.some(v => v !== ""));
+  const byId = new Map(data.map(r => [r[headers.indexOf(KEY)], Object.fromEntries(headers.map((h, i) => [h, r[i] ?? ""]))]));
+  return { headers, byId };
+}
+
+const cents = v => Math.round(parseFloat(v || 0) * 100);
+
+function totals(byId) {
+  const rows = [...byId.values()];
+  const sum = fields => rows.reduce((t, r) => t + fields.reduce((s, f) => s + cents(r[f]), 0), 0);
+  return {
+    "Employees": rows.length,
+    "Total gross pay": sum(["gross_pay"]) / 100,
+    "Total taxes": sum(TAX_FIELDS) / 100,
+    "Total net pay": sum(["net_pay"]) / 100,
+  };
+}
+
+function compare(a, b) {
+  const ids = [...new Set([...a.byId.keys(), ...b.byId.keys()])].sort();
+  return ids.map(id => {
+    const ra = a.byId.get(id), rb = b.byId.get(id);
+    if (!ra) return { status: "added", id, ra, rb, changed: new Set() };
+    if (!rb) return { status: "removed", id, ra, rb, changed: new Set() };
+    const changed = new Set(a.headers.filter(h => !IGNORED.has(h) && ra[h] !== rb[h]));
+    return { status: changed.size ? "changed" : "same", id, ra, rb, changed };
+  });
+}
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function summaryTable(ta, tb) {
+  const body = Object.keys(ta).map(name => {
+    const places = name === "Employees" ? 0 : 2;
+    const fmt = v => v.toLocaleString("en-US", { minimumFractionDigits: places, maximumFractionDigits: places });
+    const diff = Math.round((tb[name] - ta[name]) * 100) / 100;
+    const sign = diff > 0 ? "+" : "";
+    return `<tr><td>${name}</td><td class="num">${fmt(ta[name])}</td><td class="num">${fmt(tb[name])}</td>
+      <td class="num ${diff ? "flag" : ""}">${sign}${fmt(diff)}</td></tr>`;
+  }).join("");
+  return `<table><tr><th>Metric</th><th>File A</th><th>File B</th><th>Difference</th></tr>${body}</table>`;
+}
+
+function anomalyTable(headers, anomalies) {
+  const head = headers.map(h => `<th>${esc(h)}</th>`).join("");
+  const body = anomalies.map(({ status, ra, rb, changed }) => {
+    if (status !== "changed") {
+      const src = ra || rb;
+      return `<tr class="${status}"><td>${status}</td>${headers.map(h => `<td>${esc(src[h])}</td>`).join("")}</tr>`;
+    }
+    return [["A", ra], ["B", rb]].map(([label, src]) =>
+      `<tr><td>changed (${label})</td>${headers.map(h => `<td class="${changed.has(h) ? "changed" : ""}">${esc(src[h])}</td>`).join("")}</tr>`
+    ).join("");
+  }).join("");
+  return `<div class="scroll"><table><tr><th>Status</th>${head}</tr>${body}</table></div>`;
+}
+
+function sideBySideTable(headers, rows) {
+  const cols = headers.filter(h => h !== KEY);
+  const head1 = `<tr><th rowspan="2">${KEY}</th>${cols.map(h => `<th colspan="2">${esc(h)}</th>`).join("")}</tr>`;
+  const head2 = `<tr>${cols.map(() => "<th>A</th><th>B</th>").join("")}</tr>`;
+  const body = rows.map(({ status, id, ra, rb, changed }) => {
+    const cells = cols.map(h => {
+      const cls = changed.has(h) ? "changed" : "";
+      return `<td class="${cls}">${ra ? esc(ra[h]) : ""}</td><td class="${cls}">${rb ? esc(rb[h]) : ""}</td>`;
+    }).join("");
+    return `<tr class="${status === "added" || status === "removed" ? status : ""}"><td>${esc(id)}</td>${cells}</tr>`;
+  }).join("");
+  return `<div class="scroll"><table>${head1}${head2}${body}</table></div>`;
+}
+
+function render(a, b) {
+  const rows = compare(a, b);
+  const anomalies = rows.filter(r => r.status !== "same");
+  document.getElementById("report").innerHTML = `
+    <h2>Summary</h2>${summaryTable(totals(a.byId), totals(b.byId))}
+    <h2>Anomalous rows (${anomalies.length})</h2>${anomalyTable(a.headers, anomalies)}
+    <h2>All rows side by side</h2>${sideBySideTable(a.headers, rows)}`;
+}
+
+const files = {};
+async function onFile(slot, input) {
+  const file = input.files[0];
+  if (!file) return;
+  files[slot] = parseCsv(await file.text());
+  const error = document.getElementById("error");
+  error.textContent = "";
+  if (!files.A || !files.B) return;
+  if (files.A.headers.join() !== files.B.headers.join()) {
+    error.textContent = "Headers differ between the two files.";
+    document.getElementById("report").innerHTML = "";
+    return;
+  }
+  render(files.A, files.B);
+}
+document.getElementById("fileA").addEventListener("change", e => onFile("A", e.target));
+document.getElementById("fileB").addEventListener("change", e => onFile("B", e.target));
+</script>
+</body>
+</html>
